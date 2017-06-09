@@ -1077,7 +1077,6 @@ extern void gasneti_trace_init(int *pargc, char ***pargv) {
   }
 
   gasneti_tracestats_printf("GASNET_CONFIG_STRING: %s", GASNET_CONFIG_STRING);
-  gasneti_tracestats_printf("GASNet build timestamp:   " __DATE__ " " __TIME__);
   gasneti_tracestats_printf("GASNet configure args:    %s", GASNETI_CONFIGURE_ARGS);
   gasneti_tracestats_printf("GASNet configure buildid: " GASNETI_BUILD_ID);
   gasneti_tracestats_printf("GASNet system tuple:      " GASNETI_SYSTEM_TUPLE);

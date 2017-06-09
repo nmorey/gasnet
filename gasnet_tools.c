@@ -374,9 +374,6 @@ GASNETI_IDENT(gasnett_IdentString_ThreadModel, "$GASNetToolsThreadModel: " GASNE
 
 GASNETI_IDENT(gasnett_IdentString_Config, "$GASNetToolsConfig: " GASNETT_CONFIG_STRING " $");
 
-GASNETI_IDENT(gasnett_IdentString_BuildTimestamp, 
-             "$GASNetBuildTimestamp: " __DATE__ " " __TIME__ " $");
-
 GASNETI_IDENT(gasnett_IdentString_BuildID, 
              "$GASNetBuildId: " GASNETI_BUILD_ID " $");
 GASNETI_IDENT(gasnett_IdentString_ConfigureArgs, 
