@@ -473,7 +473,7 @@ extern void gasneti_huge_munmap(void *addr, uintptr_t size) {
 static void gasneti_pshm_unlink(int pshm_rank);
 
 /* create the object/region/segment and return its address */
-static void * gasneti_pshm_mmap(int pshm_rank, void *segbase, size_t segsize) {
+static void * __attribute__((noinline)) gasneti_pshm_mmap(int pshm_rank, void *segbase, size_t segsize) {
   const int create = (pshm_rank == gasneti_pshm_mynode) ||
                      ((pshm_rank == gasneti_pshm_nodes) && !gasneti_pshm_mynode);
   void * ptr = MAP_FAILED;
@@ -737,7 +737,7 @@ static void gasneti_cleanup_shm(void) {
   }
 }
 
-static void *gasneti_mmap_shared_internal(int pshmnode, void *segbase, uintptr_t segsize,
+static void  __attribute__((noinline)) *gasneti_mmap_shared_internal(int pshmnode, void *segbase, uintptr_t segsize,
                                           int may_fail) {
   int mmap_errno;
   gasneti_tick_t t1, t2;
