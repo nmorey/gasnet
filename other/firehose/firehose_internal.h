@@ -176,7 +176,7 @@ extern int	*fhc_RemoteVictimFifoBuckets;
     uintptr_t     addr;
     uintptr_t     node; /* Might instead hold len in region case */
   }	  fh_key_t;
-  GASNETI_ALWAYS_INLINE(fh_keymake)
+  GASNETI_INLINE(fh_keymake)
   fh_key_t fh_keymake(uintptr_t addr, gasnet_node_t node)
   { fh_key_t key; key.addr = addr; key.node = node; return key; }
   #define FH_KEYMAKE(addr,node) fh_keymake(addr,node)
@@ -447,7 +447,7 @@ int	fh_region_partial(gasnet_node_t node, uintptr_t *addr_p, size_t *len_p);
 /* ##################################################################### */
 /* Misc functions (COMMON, firehose.c)                                   */
 /* ##################################################################### */
-unsigned long	fh_getenv(const char *var, unsigned long multiplier);
+int64_t fh_getenv(const char *var, unsigned long multiplier);
 
 /* Common Queue Macros for Firehose FIFO and Local Bucket FIFO */
 #define FH_TAILQ_HEAD(name, type)	\

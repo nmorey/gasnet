@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/select.h>
 
 GASNETI_IDENT(gasnetc_IdentString_Version, "$GASNetCoreLibraryVersion: " GASNET_CORE_VERSION_STR " $");
 GASNETI_IDENT(gasnetc_IdentString_Name,    "$GASNetCoreLibraryName: " GASNET_CORE_NAME_STR " $");
@@ -90,9 +91,9 @@ static void gasnetc_bootstrapBarrier(void) {
 
 static int *gasnetc_fds = NULL;
 
-#define GASNETC_DEFAULT_EXITTIMEOUT_MAX       20.
-#define GASNETC_DEFAULT_EXITTIMEOUT_MIN       10.
-#define GASNETC_DEFAULT_EXITTIMEOUT_FACTOR     0.25
+#define GASNETC_DEFAULT_EXITTIMEOUT_MAX       5.
+#define GASNETC_DEFAULT_EXITTIMEOUT_MIN       1.
+#define GASNETC_DEFAULT_EXITTIMEOUT_FACTOR    0.1
 static double gasnetc_exittimeout = GASNETC_DEFAULT_EXITTIMEOUT_MAX;
 
 static struct gasnetc_exit_data {
@@ -101,8 +102,7 @@ static struct gasnetc_exit_data {
   volatile sig_atomic_t pid_tbl[1]; /* Variable length */
 } *gasnetc_exit_data = NULL;
 #define GASNETC_EXIT_DATA_SZ \
-    (offsetof(struct gasnetc_exit_data, pid_tbl[0]) + \
-     gasneti_nodes * sizeof(gasnetc_exit_data->pid_tbl[0]))
+    gasneti_offsetof(struct gasnetc_exit_data, pid_tbl[gasneti_nodes])
 
 #ifdef GASNETC_USE_SOCKETPAIR
   #include <sys/socket.h>
@@ -187,8 +187,14 @@ static void gasnetc_signal_job(int sig) {
   }
 }
 
-extern void gasnetc_fatalsignal_callback(int sig) {
+extern void gasnetc_fatalsignal_cleanup_callback(int sig) {
   gasnetc_exit_barrier_notify(128 + sig);
+  { // bug3624: pause to reduce the chance that concurrent crashes
+    // across nodes might kill each other while backtraces are printing
+    struct timeval tv; // use signal-safe sleep
+    tv.tv_sec = 1; tv.tv_usec = 0;
+    select(0, NULL, NULL, NULL, &tv);
+  }
   gasnetc_signal_job(GASNETC_REMOTEEXIT_SIGNAL);
 }
 
@@ -482,6 +488,10 @@ static int gasnetc_init(int *argc, char ***argv) {
     fprintf(stderr,"gasnetc_init(): about to spawn...\n"); fflush(stderr);
   #endif
 
+  /* Must init timers after global env, and preferably before tracing */
+  /* Note that we are intentionly doing this before we fork() */
+  GASNETI_TICKS_INIT();
+
   /* add code here to bootstrap the nodes for your conduit */
 
   gasneti_mynode = 0;
@@ -628,8 +638,8 @@ extern int gasnetc_attach(gasnet_handlerentry_t *table, int numentries,
                           uintptr_t segsize, uintptr_t minheapoffset) {
   void *segbase = NULL;
   
-  GASNETI_TRACE_PRINTF(C,("gasnetc_attach(table (%i entries), segsize=%lu, minheapoffset=%lu)",
-                          numentries, (unsigned long)segsize, (unsigned long)minheapoffset));
+  GASNETI_TRACE_PRINTF(C,("gasnetc_attach(table (%i entries), segsize=%"PRIuPTR", minheapoffset=%"PRIuPTR")",
+                          numentries, segsize, minheapoffset));
 
   if (!gasneti_init_done) 
     GASNETI_RETURN_ERRR(NOT_INIT, "GASNet attach called before init");
@@ -756,7 +766,10 @@ extern int gasnetc_attach(gasnet_handlerentry_t *table, int numentries,
   gasneti_assert(gasneti_seginfo[gasneti_mynode].addr == segbase &&
          gasneti_seginfo[gasneti_mynode].size == segsize);
 
-  gasneti_auxseg_attach(); /* provide auxseg */
+  /* (###) exchange_fn is optional (may be NULL) and is only used with GASNET_SEGMENT_EVERYTHING
+           if your conduit has an optimized bootstrapExchange pass it in place of NULL
+   */
+  gasneti_auxseg_attach(gasnetc_bootstrapExchange); /* provide auxseg */
 
   gasnete_init(); /* init the extended API */
 
@@ -836,6 +849,8 @@ extern void gasnetc_exit(int exitcode) {
     gasnetc_join_children();
   }
   exitcode = gasnetc_get_exitcode();
+
+  gasneti_pshm_fini();
 #endif
 
   gasneti_killmyprocess(exitcode);
@@ -1133,7 +1148,7 @@ extern int gasnetc_AMReplyLongM(
   See the GASNet spec and http://gasnet.lbl.gov/dist/docs/gasnet.html for
     philosophy and hints on efficiently implementing no-interrupt sections
   Note: the extended-ref implementation provides a thread-specific void* within the 
-    gasnete_threaddata_t data structure which is reserved for use by the core 
+    gasneti_threaddata_t data structure which is reserved for use by the core 
     (and this is one place you'll probably want to use it)
 */
 #if GASNETC_USE_INTERRUPTS

@@ -142,9 +142,10 @@ static int gasnetc_init(int *argc, char ***argv) {
     networkdepth = gasnett_getenv_int_withdefault("GASNET_NETWORKDEPTH", GASNETC_DEFAULT_NETWORKDEPTH, 0);
     if (networkdepth <= 1) networkdepth = GASNETC_DEFAULT_NETWORKDEPTH;
 
-    AMMPI_VerboseErrors = gasneti_VerboseErrors;
+    AMX_VerboseErrors = gasneti_VerboseErrors;
     AMMPI_SPMDkillmyprocess = gasneti_killmyprocess;
     #if !GASNETI_DISABLE_MPI_INIT_THREAD
+    { // this scope silences a warning on Cray C about INITERR bypassing this initialization:
       #if GASNETI_THREADS
         int usingthreads = 1;
       #else
@@ -166,6 +167,7 @@ static int gasnetc_init(int *argc, char ***argv) {
                       , pstr);
         tmsgstr = tmsg;
       }
+    }
     #endif
 
     /*  perform job spawn */
@@ -179,6 +181,9 @@ static int gasnetc_init(int *argc, char ***argv) {
     /* do this before trace_init to make sure it gets right environment */
     gasneti_setupGlobalEnvironment(gasneti_nodes, gasneti_mynode, 
                                    gasnetc_bootstrapExchange, gasnetc_bootstrapBroadcast);
+
+    /* Must init timers after global env, and preferably before tracing */
+    GASNETI_TICKS_INIT();
 
     /* enable tracing */
     gasneti_trace_init(argc, argv);
@@ -255,8 +260,8 @@ extern int gasnetc_attach(gasnet_handlerentry_t *table, int numentries,
   int retval = GASNET_OK;
   void *segbase = NULL;
   
-  GASNETI_TRACE_PRINTF(C,("gasnetc_attach(table (%i entries), segsize=%lu, minheapoffset=%lu)",
-                          numentries, (unsigned long)segsize, (unsigned long)minheapoffset));
+  GASNETI_TRACE_PRINTF(C,("gasnetc_attach(table (%i entries), segsize=%"PRIuPTR", minheapoffset=%"PRIuPTR")",
+                          numentries, segsize, minheapoffset));
   AMLOCK();
     if (!gasneti_init_done) 
       INITERR(NOT_INIT, "GASNet attach called before init");
@@ -393,7 +398,10 @@ extern int gasnetc_attach(gasnet_handlerentry_t *table, int numentries,
 
   GASNETI_TRACE_PRINTF(C,("gasnetc_attach(): primary attach complete\n"));
 
-  gasneti_auxseg_attach(); /* provide auxseg */
+  /* (###) exchange_fn is optional (may be NULL) and is only used with GASNET_SEGMENT_EVERYTHING
+           if your conduit has an optimized bootstrapExchange pass it in place of NULL
+   */
+  gasneti_auxseg_attach(gasnetc_bootstrapExchange); /* provide auxseg */
 
   gasnete_init(); /* init the extended API */
 
@@ -480,6 +488,10 @@ extern void gasnetc_exit(int exitcode) {
    }
   }
 
+  #if GASNET_PSHM
+    gasneti_pshm_fini();
+  #endif
+
   AMMPI_SPMDExit(exitcode);
   gasneti_fatalerror("AMMPI_SPMDExit failed");
 }
@@ -532,7 +544,14 @@ extern int gasnetc_AMPoll(void) {
   gasneti_AMPSHMPoll(0);
 #endif
   AMLOCK();
+  static int cntr;
+  // In single-supernode case never need to poll the network for client AMs.
+  // However, we'll still AM_Poll() every 256th call for orderly exit handling.
+  if ((gasneti_mysupernode.grp_count > 1) || !(0xff & cntr++)) {
     GASNETI_AM_SAFE_NORETURN(retval, AM_Poll(gasnetc_bundle));
+  } else {
+    retval = 0;
+  }
   AMUNLOCK();
   if_pf (retval) GASNETI_RETURN_ERR(RESOURCE);
   else return GASNET_OK;
@@ -555,6 +574,7 @@ extern int gasnetc_AMRequestShortM(
   va_start(argptr, numargs); /*  pass in last argument */
 #if GASNET_PSHM
   if_pt (gasneti_pshm_in_supernode(dest)) {
+    gasneti_AMPoll(); /* poll at least once, to assure forward progress */
     retval = gasneti_AMPSHM_RequestGeneric(gasnetc_Short, dest, handler, 
                                            0, 0, 0,
                                            numargs, argptr); 
@@ -584,14 +604,13 @@ extern int gasnetc_AMRequestMediumM(
   va_start(argptr, numargs); /*  pass in last argument */
 #if GASNET_PSHM
   if_pt (gasneti_pshm_in_supernode(dest)) {
+    gasneti_AMPoll(); /* poll at least once, to assure forward progress */
     retval = gasneti_AMPSHM_RequestGeneric(gasnetc_Medium, dest, handler, 
                                            source_addr, nbytes, 0,
                                            numargs, argptr);
   } else
 #endif
   { 
-    if_pf (!nbytes) source_addr = (void*)(uintptr_t)1; /* Bug 2774 - anything but NULL */
-
     AMLOCK_TOSEND();
       GASNETI_AM_SAFE_NORETURN(retval,
                AMMPI_RequestIVA(gasnetc_endpoint, dest, handler, 
@@ -617,6 +636,7 @@ extern int gasnetc_AMRequestLongM( gasnet_node_t dest,        /* destination nod
   va_start(argptr, numargs); /*  pass in last argument */
 #if GASNET_PSHM
   if_pt (gasneti_pshm_in_supernode(dest)) {
+      gasneti_AMPoll(); /* poll at least once, to assure forward progress */
       retval = gasneti_AMPSHM_RequestGeneric(gasnetc_Long, dest, handler, 
                                              source_addr, nbytes, dest_addr,
                                              numargs, argptr);
@@ -625,8 +645,6 @@ extern int gasnetc_AMRequestLongM( gasnet_node_t dest,        /* destination nod
   {   
     uintptr_t dest_offset;
     dest_offset = ((uintptr_t)dest_addr) - ((uintptr_t)gasneti_seginfo[dest].addr);
-
-    if_pf (!nbytes) source_addr = (void*)(uintptr_t)1; /* Bug 2774 - anything but NULL */
 
     AMLOCK_TOSEND();
       GASNETI_AM_SAFE_NORETURN(retval,
@@ -685,8 +703,6 @@ extern int gasnetc_AMReplyMediumM(
   } else
 #endif
   {
-    if_pf (!nbytes) source_addr = (void*)(uintptr_t)1; /* Bug 2774 - anything but NULL */
-
     AM_ASSERT_LOCKED();
     GASNETI_AM_SAFE_NORETURN(retval,
               AMMPI_ReplyIVA(token, handler, source_addr, nbytes, numargs, argptr));
@@ -722,8 +738,6 @@ extern int gasnetc_AMReplyLongM(
 
     GASNETI_SAFE_PROPAGATE(gasnet_AMGetMsgSource(token, &dest));
     dest_offset = ((uintptr_t)dest_addr) - ((uintptr_t)gasneti_seginfo[dest].addr);
-
-    if_pf (!nbytes) source_addr = (void*)(uintptr_t)1; /* Bug 2774 - anything but NULL */
 
     AM_ASSERT_LOCKED();
     GASNETI_AM_SAFE_NORETURN(retval,

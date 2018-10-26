@@ -283,14 +283,14 @@ static void malloc_test(int id) {
     int alignsz;
     for (alignsz = 1; alignsz < 64*1024; alignsz *= 2) {
       size_t sz = TEST_RAND(1,alignsz*2);
-      char * p = gasnett_malloc_aligned(alignsz,sz);
+      char * p = gasneti_malloc_aligned(alignsz,sz);
       assert_always(p);
       assert_always((((uintptr_t)p) & (alignsz-1)) == 0);
       p[0] = 'x'; p[sz - 1] = 'y';
       if (TEST_RAND_ONEIN(4)) {
         gasneti_leak_aligned(p);
       }
-      gasnett_free_aligned(p);
+      gasneti_free_aligned(p);
     }
   }
   gasneti_memcheck_all();
@@ -302,19 +302,21 @@ static void malloc_test(int id) {
     #if GASNET_DEBUG
     {
     #if GASNETI_CONDUIT_THREADS
-      float tol = 0.1; /* allow for some heap change if a conduit thread is around */
+      double tol = 0.1; /* allow for some heap change if a conduit thread is around */
     #else
-      float tol = 0; /* we have all the threads, and nothing else should be allocating */
+      double tol = 0; /* we have all the threads, and nothing else should be allocating */
     #endif
-      long delta_bytes = (long long)stats_before.live_bytes - (long long)stats_after.live_bytes;
-      long delta_objects = (long long)stats_before.live_objects - (long long)stats_after.live_objects;
-      if (labs(delta_bytes)/(double)stats_after.live_bytes > tol ||
-          labs(delta_objects)/(double)stats_after.live_objects > tol) 
+      int64_t delta_bytes = (int64_t)stats_before.live_bytes - (int64_t)stats_after.live_bytes;
+      int64_t delta_objects = (int64_t)stats_before.live_objects - (int64_t)stats_after.live_objects;
+      if (delta_bytes < 0) delta_bytes = -delta_bytes;
+      if (delta_objects < 0) delta_objects = -delta_objects;
+      if (delta_bytes/(double)stats_after.live_bytes > tol ||
+          delta_objects/(double)stats_after.live_objects > tol) 
         MSG("ERROR: unexpected heap size change:\n"
-        "  stats_before.live_bytes=%llu stats_after.live_bytes=%llu\n"
-        "  stats_before.live_objects=%llu stats_after.live_objects=%llu",
-        (unsigned long long)stats_before.live_bytes,   (unsigned long long)stats_after.live_bytes,
-        (unsigned long long)stats_before.live_objects, (unsigned long long)stats_after.live_objects);
+            "  stats_before.live_bytes=%"PRIu64" stats_after.live_bytes=%"PRIu64"\n"
+            "  stats_before.live_objects=%"PRIu64" stats_after.live_objects=%"PRIu64,
+            stats_before.live_bytes,   stats_after.live_bytes,
+            stats_before.live_objects, stats_after.live_objects);
     }
     #endif
   }
@@ -975,7 +977,7 @@ static void op_test(int id) {
 
     { gasneti_eop_t *eop;
       gasnet_handle_t h;
-      eop = gasneti_eop_create(GASNETE_THREAD_GET_ALONE);
+      eop = gasneti_eop_create(GASNETI_THREAD_GET_ALONE);
       assert_always(eop);
       h = gasneti_eop_to_handle(eop);
       assert_always(gasnet_try_syncnb(h) == GASNET_ERR_NOT_READY);
@@ -987,12 +989,12 @@ static void op_test(int id) {
     }
     PTHREAD_BARRIER(num_threads);
     { /* inc the get and put counts on my iop */
-      gasneti_iop_t *iop = gasneti_iop_register(1, 0 GASNETE_THREAD_GET);
+      gasneti_iop_t *iop = gasneti_iop_register(1, 0 GASNETI_THREAD_GET);
         assert_always(iop);
         assert_always(gasnet_try_syncnbi_puts() == GASNET_ERR_NOT_READY);
         assert_always(gasnet_try_syncnbi_gets() == GASNET_OK);
         assert_always(gasnet_try_syncnbi_all() == GASNET_ERR_NOT_READY);
-      assert_always(iop == gasneti_iop_register(2, 1 GASNETE_THREAD_GET));
+      assert_always(iop == gasneti_iop_register(2, 1 GASNETI_THREAD_GET));
         assert_always(gasnet_try_syncnbi_puts() == GASNET_ERR_NOT_READY);
         assert_always(gasnet_try_syncnbi_gets() == GASNET_ERR_NOT_READY);
         assert_always(gasnet_try_syncnbi_all() == GASNET_ERR_NOT_READY);
@@ -1030,7 +1032,7 @@ static void op_test(int id) {
         gasneti_iop_t *iop1, *iop2;
         gasneti_iop_t *peer_iop1, *peer_iop2;
         ASSERT_NBI_SYNCED();
-        iop1 = gasneti_iop_register(5, isget GASNETE_THREAD_GET); /* iop1 = 5 */
+        iop1 = gasneti_iop_register(5, isget GASNETI_THREAD_GET); /* iop1 = 5 */
         assert_always(iop1);
         ASSERT_NBI_NOTSYNCED();
         PTHREAD_BARRIER(num_threads);
@@ -1047,7 +1049,7 @@ static void op_test(int id) {
           gasnet_handle_t h2;
 
           gasnet_begin_nbi_accessregion();
-          iop2 = gasneti_iop_register(1, isget GASNETE_THREAD_GET); /* iop2 = 1 */
+          iop2 = gasneti_iop_register(1, isget GASNETI_THREAD_GET); /* iop2 = 1 */
           assert_always(iop2);
           assert_always(iop2 != iop1);
           PTHREAD_BARRIER(num_threads);
@@ -1056,9 +1058,9 @@ static void op_test(int id) {
           peer_iop2 = share[peerid];
           gasneti_iop_markdone(peer_iop2, 1, isget);  /* iop2 -= 1 */
           PTHREAD_BARRIER(num_threads);
-          assert_always(iop2 == gasneti_iop_register(2, isget GASNETE_THREAD_GET)); /* iop2 += 2 */
+          assert_always(iop2 == gasneti_iop_register(2, isget GASNETI_THREAD_GET)); /* iop2 += 2 */
 
-          eop = gasneti_eop_create(GASNETE_THREAD_GET_ALONE);
+          eop = gasneti_eop_create(GASNETI_THREAD_GET_ALONE);
           assert_always(eop);
           h2 = gasneti_eop_to_handle(eop);
           assert_always(gasnet_try_syncnb(h2) == GASNET_ERR_NOT_READY);
@@ -1090,7 +1092,7 @@ static void op_test(int id) {
           assert_always(gasnet_try_syncnb(h2) == GASNET_ERR_NOT_READY);
 
           PTHREAD_BARRIER(num_threads);
-          assert_always(iop1 == gasneti_iop_register(2, isget GASNETE_THREAD_GET)); /* iop1 += 2 */
+          assert_always(iop1 == gasneti_iop_register(2, isget GASNETI_THREAD_GET)); /* iop1 += 2 */
           ASSERT_NBI_NOTSYNCED();
           assert_always(gasnet_try_syncnb(h) == GASNET_ERR_NOT_READY);
           assert_always(gasnet_try_syncnb(h2) == GASNET_ERR_NOT_READY);

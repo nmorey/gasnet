@@ -39,7 +39,7 @@ CONDUIT_SOURCELIST =          \
 
 # additional -I or -D directives needed by this specific conduit
 # other than the standard GASNet includes and flags
-CONDUIT_EXTRALIBCFLAGS = @GNI_INCLUDES@ -DGASNET_CONDUIT_GEMINI -D_GNU_SOURCE -DHAVE_PMI_SPAWNER
+CONDUIT_EXTRALIBCFLAGS = @GNI_CFLAGS@ -DGASNET_CONDUIT_GEMINI -DHAVE_PMI_SPAWNER
 
 # additional conduit header files to install from external, non-standard directories
 CONDUIT_EXTRAHEADERS = 
@@ -99,7 +99,7 @@ libgasnet-gemini-parsync.a: $(libgasnet_dependencies)
 
 if USE_GEMINI_CONDUIT  
 lib_LIBRARIES = $(libraries) 
-all-local: $(lib_LIBRARIES) $(makefile_fragments)
+all-local: $(lib_LIBRARIES) $(pkgconfig_files)
 clean-local: do-clean-local
 install-data-local: do-install-data-local
 uninstall-local: do-uninstall-local

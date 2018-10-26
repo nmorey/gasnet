@@ -7,25 +7,31 @@
 #define __AMUDP_CONST_H
 
 #undef _PORTABLE_PLATFORM_H
-#include <amudp_portable_platform.h>
+#include <amx_portable_platform.h>
 
 /* naming policy:
   AM-defined things start with AM_
   internal things start with amudp_ or AMUDP_
   */
 
-#define _AMUDP_STRINGIFY_HELPER(x) #x
-#define AMUDP_STRINGIFY(x) _AMUDP_STRINGIFY_HELPER(x)
+#ifndef AMX_STRINGIFY
+#define _AMX_STRINGIFY_HELPER(x) #x
+#define AMX_STRINGIFY(x) _AMX_STRINGIFY_HELPER(x)
+#endif
 
-#define _AMUDP_CONCAT_HELPER(a,b) a ## b
-#define AMUDP_CONCAT(a,b) _AMUDP_CONCAT_HELPER(a,b)
+#ifndef AMX_CONCAT
+#define _AMX_CONCAT_HELPER(a,b) a ## b
+#define AMX_CONCAT(a,b) _AMX_CONCAT_HELPER(a,b)
+#endif
 
 #ifndef AMUDP
 #define AMUDP 1
 #endif
 
-#define AMUDP_LIBRARY_VERSION      3.14
-#define AMUDP_LIBRARY_VERSION_STR  AMUDP_STRINGIFY(AMUDP_LIBRARY_VERSION)
+#define AMUDP_LIBRARY_VERSION_MAJOR   3
+#define AMUDP_LIBRARY_VERSION_MINOR   15
+#define AMUDP_LIBRARY_VERSION      AMUDP_LIBRARY_VERSION_MAJOR.AMUDP_LIBRARY_VERSION_MINOR
+#define AMUDP_LIBRARY_VERSION_STR  AMX_STRINGIFY(AMUDP_LIBRARY_VERSION)
 
 #if !defined(AMUDP_DEBUG) && !defined(AMUDP_NDEBUG)
   #if defined(GASNET_DEBUG) || defined(AMX_DEBUG)
@@ -54,6 +60,10 @@
 #ifdef AMUDP_NDEBUG
   #define AMX_NDEBUG AMUDP_NDEBUG
   #define AMUDP_DEBUG_CONFIG _NDEBUG
+#endif
+#if AMX_DEBUG_VERBOSE || AMUDP_DEBUG_VERBOSE || GASNET_DEBUG_VERBOSE
+  #undef  AMX_DEBUG_VERBOSE
+  #define AMX_DEBUG_VERBOSE 1
 #endif
 
 /* idiot proofing */
@@ -141,9 +151,9 @@ typedef enum {
 
 #define AM_MaxNumHandlers()               AMUDP_MAX_NUMHANDLERS
 #define AM_GetNumHandlers(ep, pnhandlers)  \
-  ((ep) ? ((*(pnhandlers) = AMUDP_MAX_NUMHANDLERS), AM_OK) : AM_ERR_BAD_ARG : AM_ERR_BAD_ARG)
+  ((ep) ? ((*(pnhandlers) = AMUDP_MAX_NUMHANDLERS), AM_OK) : AM_ERR_BAD_ARG)
 #define AM_SetNumHandlers(ep, nhandlers)  \
-  ((ep) ? ((nhandlers) == AMUDP_MAX_NUMHANDLERS ? AM_OK : AM_ERR_RESOURCE)
+  ((ep) ? ((nhandlers) == AMUDP_MAX_NUMHANDLERS ? AM_OK : AM_ERR_RESOURCE) : AM_ERR_BAD_ARG)
 
 #define AM_MaxNumTranslations(trans)      (*(trans) = AMUDP_MAX_NUMTRANSLATIONS,AM_OK)
 

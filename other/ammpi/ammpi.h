@@ -22,11 +22,20 @@
 AMMPI_BEGIN_EXTERNC
 
 /* miscellaneous macro helpers */
-#define _STRINGIFY_HELPER(x) #x
-#define _STRINGIFY(x) _STRINGIFY_HELPER(x)
+#ifndef AMX_STRINGIFY
+#define _AMX_STRINGIFY_HELPER(x) #x
+#define AMX_STRINGIFY(x) _AMX_STRINGIFY_HELPER(x)
+#endif
 
-#define AMMPI_LIBRARY_VERSION      2.7
-#define AMMPI_LIBRARY_VERSION_STR  _STRINGIFY(AMMPI_LIBRARY_VERSION)
+#ifndef AMX_CONCAT
+#define _AMX_CONCAT_HELPER(a,b) a ## b
+#define AMX_CONCAT(a,b) _AMX_CONCAT_HELPER(a,b)
+#endif
+
+#define AMMPI_LIBRARY_VERSION_MAJOR   2
+#define AMMPI_LIBRARY_VERSION_MINOR   9
+#define AMMPI_LIBRARY_VERSION      AMMPI_LIBRARY_VERSION_MAJOR.AMMPI_LIBRARY_VERSION_MINOR
+#define AMMPI_LIBRARY_VERSION_STR  AMX_STRINGIFY(AMMPI_LIBRARY_VERSION)
 
 /* naming policy:
   AM-defined things start with AM_
@@ -72,11 +81,7 @@ typedef struct ammpi_ep *ep_t;
 
 /* ------------------------------------------------------------------------------------ */
 /* AMMPI extension types */
-#ifdef GASNET_USE_STRICT_PROTOTYPES
-typedef void *ammpi_handler_fn_t;
-#else
 typedef void (*ammpi_handler_fn_t)();  /* prototype for handler function */
-#endif
 
 typedef enum {
   ammpi_Short=0, 
@@ -167,13 +172,15 @@ typedef int op_t;
 /* ------------------------------------------------------------------------------------ */
 
 /* AMMPI-specific user entry points */
-extern int AMMPI_VerboseErrors; /* set to non-zero for verbose error reporting */
-extern int AMMPI_SilentMode; /* set to non-zero to silence any non-error output */
+// programmatic tuning knobs
+extern int AMX_VerboseErrors; /* set to non-zero for verbose error reporting */
+extern int AMX_SilentMode; /* set to non-zero to silence any non-error output */
+extern const char *AMX_ProcessLabel; /* human-readable label for this process */
 
 #ifdef __GNUC__
 __attribute__((__format__ (__printf__, 1, 2)))
 #endif
-extern void AMMPI_FatalErr(const char *msg, ...);
+extern void AMX_FatalErr(const char *msg, ...);
 
 /* define the communicator to be used as the basis for all
  * subsequent calls to AM_AllocateEndpoint(), which must be called 
@@ -254,14 +261,14 @@ extern const ammpi_stats_t AMMPI_initial_stats; /* the "empty" values for counte
 #endif
 
 #define AMX_SetTranslationTag     AMMPI_SetTranslationTag
-#define AMX_VerboseErrors         AMMPI_VerboseErrors
 #define AMX_GetEndpointStatistics AMMPI_GetEndpointStatistics
 #define AMX_DumpStatistics        AMMPI_DumpStatistics
 #define AMX_AggregateStatistics   AMMPI_AggregateStatistics
 #define AMX_initial_stats         AMMPI_initial_stats
 #define amx_stats_t               ammpi_stats_t
 #define amx_handler_fn_t          ammpi_handler_fn_t
-#define AMX_FatalErr              AMMPI_FatalErr
+#define AMX_GetSourceId           AMMPI_GetSourceId
+#define AMX_enEqual               AMMPI_enEqual
 
 #if !defined(AMMPI_DEBUG) && !defined(AMMPI_NDEBUG)
   #if defined(GASNET_DEBUG) || defined(AMX_DEBUG)
@@ -291,21 +298,17 @@ extern const ammpi_stats_t AMMPI_initial_stats; /* the "empty" values for counte
   #define AMX_NDEBUG AMMPI_NDEBUG
   #define AMMPI_DEBUG_CONFIG _NDEBUG
 #endif
-#ifdef AMMPI_DEBUG_VERBOSE
-  #define AMX_DEBUG_VERBOSE AMMPI_DEBUG_VERBOSE
+#if AMX_DEBUG_VERBOSE || AMMPI_DEBUG_VERBOSE || GASNET_DEBUG_VERBOSE
+  #undef  AMX_DEBUG_VERBOSE
+  #define AMX_DEBUG_VERBOSE 1
 #endif
 
 #if defined(AMMPI_DEBUG) && (defined(__OPTIMIZE__) || defined(NDEBUG))
     #error Tried to compile AMMPI client code with optimization enabled but also AMMPI_DEBUG (which seriously hurts performance). Disable C and MPI_CC compiler optimization or reconfigure/rebuild without --enable-debug
 #endif
 
-#ifndef _CONCAT
-#define _CONCAT_HELPER(a,b) a ## b
-#define _CONCAT(a,b) _CONCAT_HELPER(a,b)
-#endif
-
 #undef AM_Init
-#define AM_Init _CONCAT(AM_Init_AMMPI,AMMPI_DEBUG_CONFIG)
+#define AM_Init AMX_CONCAT(AM_Init_AMMPI,AMMPI_DEBUG_CONFIG)
 
 /* System parameters */
 #define AM_MaxShort()   AMMPI_MAX_SHORT
@@ -337,7 +340,7 @@ extern int AM_SetTag(ep_t ea, tag_t tag);
 extern int AMMPI_Map(ep_t ea, int index, en_t *name, tag_t tag);
 extern int AMMPI_MapAny(ep_t ea, int *index, en_t *name, tag_t tag);
 #define AM_Map(ea, index, name, tag)    AMMPI_Map((ea), (index), &(name), (tag))
-#define AM_MapAny(ea, index, name, tag) AMMPI_Map((ea), (index), &(name), (tag))
+#define AM_MapAny(ea, index, name, tag) AMMPI_MapAny((ea), (index), &(name), (tag))
 extern int AM_UnMap(ep_t ea, int index);
 extern int AM_GetTranslationInuse(ep_t ea, int i);
 extern int AM_GetTranslationTag(ep_t ea, int i, tag_t *tag);
@@ -353,9 +356,9 @@ extern int _AM_SetHandler(ep_t ea, handler_t handler, ammpi_handler_fn_t functio
 extern int _AM_SetHandlerAny(ep_t ea, handler_t *handler, ammpi_handler_fn_t function);
 #define AM_SetHandlerAny(ea, handler, function) _AM_SetHandlerAny((ea), (handler), (ammpi_handler_fn_t)(function))
 #define AM_GetNumHandlers(ep, pnhandlers)  \
-  ((ep) ? ((*(pnhandlers) = AMMPI_MAX_NUMHANDLERS), AM_OK) : AM_ERR_BAD_ARG : AM_ERR_BAD_ARG)
+  ((ep) ? ((*(pnhandlers) = AMMPI_MAX_NUMHANDLERS), AM_OK) : AM_ERR_BAD_ARG)
 #define AM_SetNumHandlers(ep, nhandlers)  \
-  ((ep) ? ((nhandlers) == AMMPI_MAX_NUMHANDLERS ? AM_OK : AM_ERR_RESOURCE)
+  ((ep) ? ((nhandlers) == AMMPI_MAX_NUMHANDLERS ? AM_OK : AM_ERR_RESOURCE) : AM_ERR_BAD_ARG)
 
 /* Events */
 extern int AM_GetEventMask(eb_t eb, int *mask);
@@ -368,6 +371,7 @@ extern int AM_GetSourceEndpoint(void *token, en_t *gan);
 extern int AM_GetDestEndpoint(void *token, ep_t *endp);
 extern int AM_GetMsgTag(void *token, tag_t *tagp);
 extern int AMMPI_GetSourceId(void *token, int *srcid);
+extern int AMMPI_enEqual(en_t en1, en_t en2);
 
 /* Poll */
 extern int AM_Poll(eb_t bundle);
@@ -379,40 +383,40 @@ extern int AM_Poll(eb_t bundle);
 extern int AMMPI_Request(ep_t request_endpoint, ammpi_node_t reply_endpoint, handler_t handler, 
                          int numargs, ...);
 extern int AMMPI_RequestI (ep_t request_endpoint, ammpi_node_t reply_endpoint, handler_t handler, 
-                          void *source_addr, int nbytes,
+                          void *source_addr, size_t nbytes,
                           int numargs, ...);
 extern int AMMPI_RequestXfer(ep_t request_endpoint, ammpi_node_t reply_endpoint, handler_t handler, 
-                          void *source_addr, int nbytes, uintptr_t dest_offset, 
+                          void *source_addr, size_t nbytes, uintptr_t dest_offset, 
                           int async,
                           int numargs, ...);
 
 extern int AMMPI_Reply(void *token, handler_t handler, 
                          int numargs, ...);
 extern int AMMPI_ReplyI(void *token, handler_t handler, 
-                          void *source_addr, int nbytes,
+                          void *source_addr, size_t nbytes,
                           int numargs, ...);
 extern int AMMPI_ReplyXfer(void *token, handler_t handler, 
-                          void *source_addr, int nbytes, uintptr_t dest_offset, 
+                          void *source_addr, size_t nbytes, uintptr_t dest_offset, 
                           int numargs, ...);
 
 /* alternate forms that take va_list ptr to support GASNet */
 extern int AMMPI_RequestVA(ep_t request_endpoint, ammpi_node_t reply_endpoint, handler_t handler, 
                          int numargs, va_list argptr);
 extern int AMMPI_RequestIVA(ep_t request_endpoint, ammpi_node_t reply_endpoint, handler_t handler, 
-                          void *source_addr, int nbytes,
+                          void *source_addr, size_t nbytes,
                           int numargs, va_list argptr);
 extern int AMMPI_RequestXferVA(ep_t request_endpoint, ammpi_node_t reply_endpoint, handler_t handler, 
-                          void *source_addr, int nbytes, uintptr_t dest_offset, 
+                          void *source_addr, size_t nbytes, uintptr_t dest_offset, 
                           int async,
                           int numargs, va_list argptr);
 
 extern int AMMPI_ReplyVA(void *token, handler_t handler, 
                          int numargs, va_list argptr);
 extern int AMMPI_ReplyIVA(void *token, handler_t handler, 
-                          void *source_addr, int nbytes,
+                          void *source_addr, size_t nbytes,
                           int numargs, va_list argptr);
 extern int AMMPI_ReplyXferVA(void *token, handler_t handler, 
-                          void *source_addr, int nbytes, uintptr_t dest_offset, 
+                          void *source_addr, size_t nbytes, uintptr_t dest_offset, 
                           int numargs, va_list argptr);
 
 

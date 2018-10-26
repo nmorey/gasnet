@@ -10,17 +10,14 @@
 
 # header files to be installed
 # Conduit-specific headers will overwrite any conflicts in extended-ref
-headers = $(top_srcdir)/extended-ref/*.h $(srcdir)/*.h $(CONDUIT_EXTRAHEADERS)
+headers = $(top_srcdir)/extended-ref/*.h                    \
+          $(top_srcdir)/extended-ref/vis/gasnet_vis_fwd.h   \
+          $(top_srcdir)/extended-ref/coll/gasnet_coll_fwd.h   \
+          $(srcdir)/*.h                                     \
+	  $(CONDUIT_EXTRAHEADERS)
 
 # headers to exclude from $(headers) - please don't use wildcards
-# XXX: Probably not complete and we lack an automated update machanism
-private_headers = gasnet_coll_autotune.h \
-                  gasnet_coll_hashtable.h \
-                  gasnet_coll_scratch.h \
-                  gasnet_coll_team.h \
-                  gasnet_coll_trees.h \
-                  gasnet_extended_refcoll.h \
-                  gasnet_extended_refvis.h \
+private_headers = \
                   $(CONDUIT_PRIVATEHEADERS)
 
 @BUILD_SEQ_LIBS_TRUE@     makefile_fragments_seq =     $(CONDUIT_NAME)-seq.mak
@@ -45,7 +42,7 @@ EXTRA_DIST = $(CONDUIT_FILELIST) README
 
 # convenience aliases
 seq par parsync: force
-	@$(MAKE) $(CONDUIT_NAME)-$@.mak gasnet-$(CONDUIT_NAME)-$@.pc libgasnet-$(CONDUIT_NAME)-$@.a
+	@$(MAKE) gasnet-$(CONDUIT_NAME)-$@.pc libgasnet-$(CONDUIT_NAME)-$@.a
 	@for dir in $(SUBDIRS) ; do 		\
 	  if test "$$dir" != "." ; then 	\
 	    ( cd $$dir && $(MAKE) all ) || exit 1 ; 	\
@@ -248,7 +245,7 @@ do-uninstall-local:
 
 do-error: 
 	@echo "ERROR: $(CONDUIT_NAME)-conduit support was not detected at configure time"
-	@hecho "       try re-running configure with --enable-$(CONDUIT_NAME)"
+	@echo "       try re-running configure with --enable-$(CONDUIT_NAME)"
 	@exit 1
 
 $(top_builddir)/other/Makefile-conduit.mak: $(top_srcdir)/other/Makefile-conduit.mak.in
@@ -263,7 +260,7 @@ $(top_builddir)/other/fragment-head.mak: $(top_srcdir)/other/fragment-head.mak.i
 $(top_builddir)/tests/Makefile: $(top_srcdir)/tests/Makefile.in
 	cd $(top_builddir)/tests && $(MAKE) Makefile
 
-Makefile: $(srcdir)/Makefile.am 			\
+Makefile: $(srcdir)/Makefile.in 			\
           $(top_builddir)/other/Makefile-conduit.mak 	\
           $(top_builddir)/other/Makefile-libgasnet.mak 	\
           $(top_builddir)/tests/Makefile
@@ -275,11 +272,11 @@ $(CONDUIT_NAME)-seq.mak: $(make_fragment_deps)
 	$(MAKE) do-make-fragment thread_model=seq THREAD_MODEL=SEQ
 
 $(CONDUIT_NAME)-par.mak: $(make_fragment_deps)
-	@@HAVE_PTHREAD_FALSE@$(MAKE) do-pthreads-error
+	@$(PTHREADS_ERROR_CHECK)
 	$(MAKE) do-make-fragment thread_model=par THREAD_MODEL=PAR
 
 $(CONDUIT_NAME)-parsync.mak: $(make_fragment_deps)
-	@@HAVE_PTHREAD_FALSE@$(MAKE) do-pthreads-error
+	@$(PTHREADS_ERROR_CHECK)
 	$(MAKE) do-make-fragment thread_model=parsync THREAD_MODEL=PARSYNC
 
 do-make-fragment: force
@@ -302,11 +299,11 @@ gasnet-$(CONDUIT_NAME)-seq.pc: $(CONDUIT_NAME)-seq.mak $(pkgconfig_conduit)
 	@$(MAKE) do-pkgconfig-conduit thread_model=seq pkgconfig_file="$@" FRAGMENT="$<"
 
 gasnet-$(CONDUIT_NAME)-par.pc: $(CONDUIT_NAME)-par.mak $(pkgconfig_conduit)
-	@@HAVE_PTHREAD_FALSE@$(MAKE) do-pthreads-error
+	@$(PTHREADS_ERROR_CHECK)
 	@$(MAKE) do-pkgconfig-conduit thread_model=par pkgconfig_file="$@" FRAGMENT="$<"
 
 gasnet-$(CONDUIT_NAME)-parsync.pc: $(CONDUIT_NAME)-parsync.mak $(pkgconfig_conduit)
-	@@HAVE_PTHREAD_FALSE@$(MAKE) do-pthreads-error
+	@$(PTHREADS_ERROR_CHECK)
 	@$(MAKE) do-pkgconfig-conduit thread_model=parsync pkgconfig_file="$@" FRAGMENT="$<"
 
 do-pkgconfig-conduit: force

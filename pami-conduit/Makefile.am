@@ -45,13 +45,13 @@ CONDUIT_SOURCELIST =          \
 
 # additional -I or -D directives needed by this specific conduit
 # other than the standard GASNet includes and flags
-CONDUIT_EXTRALIBCFLAGS = @PAMI_INCLUDE@
+CONDUIT_EXTRALIBCFLAGS = @PAMI_CFLAGS@
 
 # additional conduit header files to install from external, non-standard directories
 CONDUIT_EXTRAHEADERS = 
 
 # headers selected by default rules that should NOT be installed
-CONDUIT_PRIVATEHEADERS =
+CONDUIT_PRIVATEHEADERS = gasnet_coll_pami.h
 
 # additional file dependencies not mentioned elsewhere 
 # that should force libgasnet rebuild on update
@@ -104,7 +104,7 @@ libgasnet-pami-parsync.a: $(libgasnet_dependencies)
 
 if USE_PAMI_CONDUIT  
 lib_LIBRARIES = $(libraries) 
-all-local: $(lib_LIBRARIES) $(makefile_fragments)
+all-local: $(lib_LIBRARIES) $(pkgconfig_files)
 clean-local: do-clean-local
 install-data-local: do-install-data-local
 uninstall-local: do-uninstall-local

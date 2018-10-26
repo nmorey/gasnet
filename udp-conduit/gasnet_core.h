@@ -51,8 +51,8 @@ GASNETI_NORETURNP(gasnetc_exit)
   #define gasnet_hold_interrupts    gasnetc_hold_interrupts
   #define gasnet_resume_interrupts  gasnetc_resume_interrupts
 #else
-  #define gasnet_hold_interrupts()
-  #define gasnet_resume_interrupts()
+  #define gasnet_hold_interrupts()   ((void)0)
+  #define gasnet_resume_interrupts() ((void)0)
 #endif
 
 /* ------------------------------------------------------------------------------------ */
@@ -129,11 +129,7 @@ typedef struct _gasnet_hsl_t {
 */
 
 #define gasnet_AMMaxArgs()          ((size_t)AM_MaxShort())
-#if GASNET_PSHM
-  #define gasnet_AMMaxMedium()      MIN((size_t)AM_MaxMedium(), GASNETI_MAX_MEDIUM_PSHM)
-#else
-  #define gasnet_AMMaxMedium()      ((size_t)AM_MaxMedium())
-#endif
+#define gasnet_AMMaxMedium()        MIN((size_t)AM_MaxMedium(), GASNETC_MAX_MEDIUM_PSHM_DFLTMAX)
 #define gasnet_AMMaxLongRequest()   ((size_t)AM_MaxLong())
 #define gasnet_AMMaxLongReply()     ((size_t)AM_MaxLong())
 

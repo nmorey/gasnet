@@ -41,7 +41,7 @@ CONDUIT_SOURCELIST =              \
 
 # additional -I or -D directives needed by this specific conduit
 # other than the standard GASNet includes and flags
-CONDUIT_EXTRALIBCFLAGS = -I@PORTALS4_INCLUDE@ @PORTALS4_LIBCFLAGS@ -DHAVE_PMI_SPAWNER
+CONDUIT_EXTRALIBCFLAGS = @PORTALS4_CFLAGS@ -DHAVE_PMI_SPAWNER
 
 # additional conduit header files to install from external, non-standard directories
 CONDUIT_EXTRAHEADERS = 
@@ -100,7 +100,7 @@ libgasnet-portals4-parsync.a: $(libgasnet_dependencies)
 
 if USE_PORTALS4_CONDUIT  
 lib_LIBRARIES = $(libraries) 
-all-local: $(lib_LIBRARIES) $(makefile_fragments)
+all-local: $(lib_LIBRARIES) $(pkgconfig_files)
 clean-local: do-clean-local
 install-data-local: do-install-data-local
 uninstall-local: do-uninstall-local

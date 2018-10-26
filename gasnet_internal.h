@@ -15,6 +15,10 @@
 #include <gasnet.h> /* MUST come first to ensure correct inttypes behavior */
 #include <gasnet_tools.h>
 
+#if GASNETI_COMPILER_IS_UNKNOWN
+  #error "Invalid attempt to build GASNet with a compiler other than the one probed at configure time"
+#endif
+
 GASNETI_BEGIN_EXTERNC
 GASNETI_BEGIN_NOWARN
 
@@ -44,6 +48,8 @@ extern char gasneti_exename[PATH_MAX];
 /* conduit-independent sanity checks */
 extern void gasneti_check_config_preinit(void);
 extern void gasneti_check_config_postattach(void);
+
+extern int gasneti_malloc_munmap_disabled;
 
 /* decode the command-line arguments */
 extern void gasneti_decode_args(int *argc, char ***argv);
@@ -244,6 +250,12 @@ GASNETI_MALLOCP(_gasneti_strndup)
 
 extern void gasneti_freezeForDebugger(void);
 
+#if PLATFORM_OS_LINUX || PLATFORM_OS_WSL
+  // dynamic check for Linux flavor, to detect binary porting
+  // return non-zero iff this Linux system is actually Microsoft Windows Subsystem for Linux
+  extern int gasneti_platform_isWSL(void);
+#endif
+
 /* GASNET_DEBUG_VERBOSE is set by configure to request job startup and general 
    status messages on stderr 
 */
@@ -283,11 +295,13 @@ extern gasneti_spawnerfn_t const *gasneti_spawnerInit(int *argc_p, char ***argv_
 
 void gasneti_defaultSignalHandler(int sig);
 
+/* gasneti_max_segsize() is the user-selected limit for the max mmap size, as gleaned from several sources */
+uintptr_t gasneti_max_segsize();
 #if defined(HAVE_MMAP) || GASNET_PSHM
   #define GASNETI_MMAP_OR_PSHM 1
   extern gasnet_seginfo_t gasneti_mmap_segment_search(uintptr_t maxsz);
  #if defined(HAVE_MMAP)
-  extern void gasneti_mmap_fixed(void *segbase, uintptr_t segsize);
+  extern void *gasneti_mmap_fixed(void *segbase, uintptr_t segsize);
   extern void *gasneti_mmap(uintptr_t segsize);
   extern void gasneti_munmap(void *segbase, uintptr_t segsize);
  #endif
@@ -295,26 +309,11 @@ void gasneti_defaultSignalHandler(int sig);
   extern void *gasneti_huge_mmap(void *addr, uintptr_t size);
   extern void gasneti_huge_munmap(void *addr, uintptr_t size);
  #endif
-  #ifndef GASNETI_MMAP_MAX_SIZE
-    /* GASNETI_MMAP_MAX_SIZE controls the maz size segment attempted by the mmap binary search
-       can't use a full 2 GB due to sign bit problems 
-       on the int argument to mmap() for some 32-bit systems
-       This setting can be overridden using configure --with-segment-mmap-max=XGB
-     */
-    #define GASNETI_MMAP_MAX_SIZE	  ((((uint64_t)1)<<31) - GASNET_PAGESIZE)  /* 2 GB */
-  #endif
-  uintptr_t _gasneti_max_segsize(uint64_t configure_val);
-  /* GASNETI_MMAP_LIMIT is the user-selected limit for the max mmap size, as gleaned from several sources */
-  #define GASNETI_MMAP_LIMIT _gasneti_max_segsize(GASNETI_MMAP_MAX_SIZE)
+  #define GASNETI_MMAP_LIMIT gasneti_max_segsize()
   #ifndef GASNETI_MMAP_GRANULARITY
     /* GASNETI_MMAP_GRANULARITY is the minimum increment used by the mmap binary search */
     #define GASNETI_MMAP_GRANULARITY  (((size_t)2)<<21)  /* 4 MB */
   #endif
-#else
-  #ifndef GASNETI_MALLOCSEGMENT_MAX_SIZE
-  #define GASNETI_MALLOCSEGMENT_MAX_SIZE (100*1048576) /* Max segment sz to use when mmap not avail */
-  #endif
-  #define GASNETI_MALLOCSEGMENT_LIMIT _gasneti_max_segsize(GASNETI_MALLOCSEGMENT_MAX_SIZE)
 #endif
 
 #ifndef GASNETI_USE_HIGHSEGMENT
@@ -365,7 +364,11 @@ typedef struct {
 
 typedef gasneti_auxseg_request_t (*gasneti_auxsegregfn_t)(gasnet_seginfo_t *auxseg_info);
 
-/* collect required auxseg sizes and subtract them from the max values to report to client */
+// collect and return optimal auxseg size sum, padded to page size
+// may be called multiple times, subsequent calls return cached value
+uintptr_t gasneti_auxseg_preinit(void);
+
+// subtract auxseg requirements from the values to report to client
 void gasneti_auxseg_init(void);
 
 /* consume the client's segsize request and return the 
@@ -374,12 +377,12 @@ uintptr_t gasneti_auxseg_preattach(uintptr_t client_request_sz);
 
 /* provide auxseg to GASNet components and init secondary segment arrays 
    requires gasneti_seginfo has been initialized to the correct values
+   exchangefn is used only for GASNET_SEGMENT_EVERYTHING and may be NULL
  */
-void gasneti_auxseg_attach(void);
+void gasneti_auxseg_attach(gasneti_bootstrapExchangefn_t exchangefn);
 
 #if GASNET_SEGMENT_EVERYTHING
-  extern void gasnetc_auxseg_reqh(gasnet_token_t token, void *buf, size_t nbytes, 
-                                  gasnet_handlerarg_t msg, gasnet_handlerarg_t offset);
+  extern void gasnetc_auxseg_reqh(gasnet_token_t token, void *buf, size_t nbytes, gasnet_handlerarg_t arg0);
   #define GASNETC_AUXSEG_HANDLERS() \
     gasneti_handler_tableentry_no_bits(gasnetc_auxseg_reqh)
 #endif
@@ -409,7 +412,7 @@ typedef const struct _gasneti_iop_S gasneti_iop_t;
 /* create a new explicit-handle NB operation
    represented with abstract type gasneti_eop_t
    and mark it in-flight */
-gasneti_eop_t *gasneti_eop_create(GASNETE_THREAD_FARG_ALONE);
+gasneti_eop_t *gasneti_eop_create(GASNETI_THREAD_FARG_ALONE);
 
 /* convert an gasneti_eop_t* created by an earlier call from this
    thread to gasneti_new_eop(), into a gasnet_handle_t suitable
@@ -424,7 +427,7 @@ gasneti_eop_t *gasneti_eop_create(GASNETE_THREAD_FARG_ALONE);
    implicit-handle NB context represented with abstract type gasneti_iop_t, 
    and return a pointer to that context
    if isput is non-zero, the registered operations are puts, otherwise they are gets */
-gasneti_iop_t *gasneti_iop_register(unsigned int noperations, int isget GASNETE_THREAD_FARG);
+gasneti_iop_t *gasneti_iop_register(unsigned int noperations, int isget GASNETI_THREAD_FARG);
 
 /* given an gasneti_eop_t* returned by an earlier call from any thread
    to gasneti_new_eop(), mark that explicit-handle NB operation complete
@@ -532,12 +535,14 @@ extern int gasneti_VerboseErrors;
 /* make a GASNet call - if it fails, print error message and return error */
 #define GASNETI_SAFE_PROPAGATE(fncall) do {                  \
    int retcode = (fncall);                                   \
-   if_pf (gasneti_VerboseErrors && retcode != GASNET_OK) {   \
-     char msg[1024];                                         \
-     snprintf(msg, sizeof(msg),                              \
-        "\nGASNet encountered an error: %s(%i)\n",           \
+   if_pf (retcode != GASNET_OK) {                            \
+     char msg[80] = { 0 };                                   \
+     if (gasneti_VerboseErrors) {                            \
+       snprintf(msg, sizeof(msg),                            \
+        "GASNet encountered an error: %s(%i)",               \
         gasnet_ErrorName(retcode), retcode);                 \
-     msg[sizeof(msg)-2] = '\n'; msg[sizeof(msg)-1] = '\0';   \
+       msg[sizeof(msg)-1] = '\0';                            \
+     }                                                       \
      GASNETI_RETURN_ERRFR(RESOURCE, fncall, msg);            \
    }                                                         \
  } while (0)
@@ -745,6 +750,65 @@ extern void gasneti_nodemapFini(void);
 #if GASNET_PSHM
 #include <gasnet_pshm.h>
 #endif
+
+/* ------------------------------------------------------------------------------------ */
+// Thread-local data
+
+// Subsystems and conduits should use gasnet_*_fwd.h files to provide type definitions.
+// However, some don't have any better home:
+typedef struct _gasnete_eop_t gasnete_eop_t;
+typedef struct _gasnete_iop_t gasnete_iop_t;
+typedef union _gasnete_eopaddr_t {
+  struct {
+    uint8_t _bufferidx;
+    uint8_t _eopidx;
+  } compaddr;
+  uint16_t fulladdr;
+} gasnete_eopaddr_t;
+
+typedef struct _gasneti_threaddata_t {
+  //
+  // Fixed fields that should appear first in the threaddata struct for all conduits
+  // NOTE: it is critical that these not change postition or order
+  // TODO: eventually these might be replaced with inlined fields
+  //
+  void *gasnetc_threaddata;     /* ptr reserved for use by the core */
+  void *gasnete_coll_threaddata;/* ptr reserved for use by the collectives */
+  void *gasnete_vis_threaddata; /* ptr reserved for use by the VIS */
+
+  //
+  // Thread mangement fields
+  // Owned by gasnet_extended_help.h
+  //
+  gasnete_threadidx_t threadidx;
+
+  gasnete_thread_cleanup_t *thread_cleanup; /* thread cleanup function LIFO */
+  int thread_cleanup_delay;
+
+  //
+  // Extended API data
+  // Owned by multiple Extended API files (potentially conduit-specific)
+  //
+
+  GASNETE_VALGET_FIELDS
+
+  gasnete_eop_t *eop_bufs[256]; /*  buffers of eops for memory management */
+  int eop_num_bufs;             /*  number of valid buffer entries */
+  gasnete_eopaddr_t eop_free;   /*  free list of eops */
+
+  /*  stack of iops - head is active iop servicing new implicit ops */
+  gasnete_iop_t *current_iop;  
+
+  gasnete_iop_t *iop_free;      /*  free list of iops */
+
+  //
+  // Conduit-specific data
+  // Owned by [CONDUIT]-conduie/gasnet_extended_fwd.h
+  //
+  #ifdef GASNETE_CONDUIT_THREADDATA_FIELDS
+  GASNETE_CONDUIT_THREADDATA_FIELDS
+  #endif
+} gasneti_threaddata_t;
 
 /* ------------------------------------------------------------------------------------ */
 GASNETI_END_NOWARN

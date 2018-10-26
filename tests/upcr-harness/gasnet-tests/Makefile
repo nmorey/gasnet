@@ -6,15 +6,13 @@ all:
 
 PERL ?= perl
 CONDUIT_DIR=$(TOP_BUILDDIR)/gasnet/$(NETWORK)-conduit
-STRICT_PROTO_FLAGS=`echo $$BUPC_STRICT_PROTO_FLAGS | $(PERL) -pe 's/-Wc,//'`
-MANUAL_CFLAGS=
 
 testcxx%: force
 	@if test -n "`$(UPCC) --network=udp --echo-var UPCR_LD 2>/dev/null`"; then \
 	  makename=`echo $@ | $(PERL) -pe 's/_.*-(seq|par|parsync)$$/-$$1/'`; \
 	   cmdname=`echo $@ | $(PERL) -pe 's/(_.*)?-(seq|par|parsync)$$//'`; \
 	   echo "$$makename => $$cmdname => $@" ; set -x ; \
-	   $(MAKE) -C $(CONDUIT_DIR) $$makename MANUAL_CFLAGS="$(MANUAL_CFLAGS)" && \
+	   $(MAKE) -C $(CONDUIT_DIR) $$makename MANUAL_CXXFLAGS="$(MANUAL_CXXFLAGS)" && \
 	   cp -f $(CONDUIT_DIR)/$$cmdname$(EXESUFFIX) $@$(EXESUFFIX);              \
 	 else                                                                    \
 	   echo '#!/bin/sh' > $@ ; chmod +x $@;                                  \
@@ -26,7 +24,7 @@ test%: force
 	@makename=`echo $@ | $(PERL) -pe 's/_.*-(seq|par|parsync)$$/-$$1/'`; \
 	 cmdname=`echo $@ | $(PERL) -pe 's/(_.*)?-(seq|par|parsync)$$//'`; \
 	 echo "$$makename => $$cmdname => $@" ; set -x ; \
-         $(MAKE) -C $(CONDUIT_DIR) $$makename MANUAL_CFLAGS="$(STRICT_PROTO_FLAGS) $(MANUAL_CFLAGS)" && \
+         $(MAKE) -C $(CONDUIT_DIR) $$makename MANUAL_CFLAGS="$(MANUAL_CFLAGS)" && \
          cp -f $(CONDUIT_DIR)/$$cmdname$(EXESUFFIX) $@$(EXESUFFIX)
 
 testconduitspecific: force
@@ -42,7 +40,7 @@ testconduitspecific: force
            conduit_test=testam ;		\
            conduit_mode=parsync ;		\
          fi ;					\
-         $(MAKE) -C $(CONDUIT_DIR) $$conduit_test-$$conduit_mode MANUAL_CFLAGS="$(STRICT_PROTO_FLAGS) $(MANUAL_CFLAGS)" && \
+         $(MAKE) -C $(CONDUIT_DIR) $$conduit_test-$$conduit_mode MANUAL_CFLAGS="$(MANUAL_CFLAGS)" && \
 	 cp -f $(CONDUIT_DIR)/$$conduit_test$(EXESUFFIX) $@$(EXESUFFIX)
 
 parsync: force

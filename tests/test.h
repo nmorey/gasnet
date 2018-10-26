@@ -71,6 +71,26 @@ GASNETT_BEGIN_EXTERNC
   #define assert(x) assert_always(x)
 #endif
 
+#ifndef _CONCAT
+#define _CONCAT_HELPER(a,b) a ## b
+#define _CONCAT(a,b) _CONCAT_HELPER(a,b)
+#endif
+
+/* ------------------------------------------------------------------------------------ */
+// Static assertions : assert a property at compile time, generate an error otherwise
+// `cond` must be an integer constant expression - ie no non-integer types or variable references
+
+// static assertion in a block scope
+// safe to use multiple times per line (eg in a macro expansion)
+#define test_static_assert(cond) do { \
+  static const char *_test_static_assert[ (cond) ?1:-1] = { "Static assertion: " #cond }; \
+} while (0)
+
+// static assertion at file scope
+// safe to use multiple times per line only in C99 mode, not C++ mode
+#define test_static_assert_file(cond) \
+  static const char *_CONCAT(_test_static_assert_file_,__LINE__)[ (cond) ?1:-1]
+
 /* ------------------------------------------------------------------------------------ */
 /* generic message output utility
    test_makeMsg(baseformatargs, msgpred, isfatal, msgeval): 
@@ -190,25 +210,69 @@ static void _test_makeErrMsg(const char *format, ...)) {
 #define alignup_ptr(a,b) ((void *)(((((uintptr_t)(a))+(b)-1)/(b))*(b)))
 #define aligndown(a,b) (((a)/(b))*(b))
 
-static int _test_rand(int low, int high) {
-  int result;
+// Two 64-bit PRNGs are available
+//  + "LCG64" uses 64-bit Linear Congruential Generator
+//  + "RANDn" uses multiple calls to rand().
+#if defined(_TEST_USE_LCG64)
+  // Keep setting
+#elif (RAND_MAX < 255) || \
+      PLATFORM_COMPILER_OPEN64 || PLATFORM_COMPILER_CLANG
+  // SHOULD NOT use "RANDn" in the following cases:
+  // + Any platform with RAND_MAX < 255 (though C99 requires 32K+)
+  // + Open64 to work-around bug 3738
+  // + Clang to work-around bug 3630
+  #define _TEST_USE_LCG64 1
+#else
+  // Current default is LCG64
+  #define _TEST_USE_LCG64 1
+#endif
+
+#if _TEST_USE_LCG64
+  // NOTE: this state and seed operation are per compilation unit.
+  // TODO: If/when we write tests spanning multiple source files we may
+  // need to move the PRNG state into its own object file.
+  static uint64_t _test_rand_val = 5551212;
+  #define TEST_SRAND(seed)  ((void)(_test_rand_val = (seed)))
+#else
+  #define TEST_SRAND(seed)  srand(seed)
+#endif
+
+static int64_t _test_rand(int64_t low, int64_t high) {
   assert(low <= high);
   assert(low <= high+1); /* We will overflow otherwise */
-#ifndef TEST_NO_FP_RAND
-  result = low+(int)(((double)(high-low+1))*rand()/(RAND_MAX+1.0));
+  uint64_t const range = high - low + 1;
+#if _TEST_USE_LCG64
+  // Implement the well-known LCG PRNG with widely used parameters.
+  // For an explanation of the LCG algorithm:
+  //     https://en.wikipedia.org/wiki/Linear_congruential_generator
+  // or any CS text (such as Knuth) covering pseudo-random number generation.
+  // For an example of where this particular generator is in use:
+  //     https://nuclear.llnl.gov/CNP/rng/rngman/
+  // and specifically the description of *this* generator:
+  //     https://nuclear.llnl.gov/CNP/rng/rngman/node4.html
+  // which states this multiplier is also the default for lcg64 in SPRNG:
+  //     http://www.sprng.org/sprng.html
+  _test_rand_val *= 2862933555777941757ull;
+  _test_rand_val += 3037000493ull;
+  uint64_t val = _test_rand_val;
 #else
-  { int bin_count = high - low + 1;
-    unsigned int bin_width = ((unsigned int)RAND_MAX + 1) / (unsigned int)bin_count;
-    do { result = rand() / bin_width; } while (result >= bin_count);
-    result += low;
-  }
+  // The "RANDn" generator accumulates 8 random bits at a time using
+  // multiple calls to libc's rand(), making only as many calls as
+  // are required to meet the requested [low,high] range.
+  assert(RAND_MAX >= 255); // C99 guarantees 32k+
+  uint64_t rs = range;
+  uint64_t val = 0;
+  do { 
+    val = (val << 8) ^ rand();
+    rs >>= 8;
+  } while (rs);
 #endif
+  int64_t result = (int64_t)(val % range) + low;
   assert(result >= low && result <= high);
   return result;
 }
 #define TEST_RAND(low,high) _test_rand((low), (high))
 #define TEST_RAND_PICK(a,b) (TEST_RAND(0,1)==1?(a):(b))
-#define TEST_SRAND(seed)    srand(seed)
 #define TEST_RAND_ONEIN(p)  (TEST_RAND(1,p) == 1)
 
 #define TEST_HIWORD(arg)     ((uint32_t)(((uint64_t)(arg)) >> 32))
@@ -246,6 +310,97 @@ static char test_sections[255];
   #define TIME() gasnett_ticks_to_us(gasnett_ticks_now()) 
 #endif
 
+#define test_ns_to_ticks(_ns) \
+ (gasnett_tick_t)((_ns)*((double)(1<<30))/gasnett_ticks_to_ns(1<<30))
+
+/* ------------------------------------------------------------------------------------ */
+// Auto-scaling Iteration support
+// Macros to support scaling the iterations of a test to meet a target running time
+// For macro usage example, see testvisperf.c
+// For operational details, build with MANUAL_DEFINES=-DTEST_ASI_DEBUG
+#ifndef TEST_ASI_DEBUG
+#define TEST_ASI_DEBUG 0
+#endif
+#ifndef TEST_ASI_BANKS
+#define TEST_ASI_BANKS 10
+#endif
+#ifndef TEST_ASI_MININTERVAL
+#define TEST_ASI_MININTERVAL  0.001  // min acceptable interval, in seconds
+#endif
+static gasnett_tick_t _test_asi_interval = 0; // min interval and enable
+static gasnett_tick_t _test_asi_begin = 0;
+static size_t _test_asi_iters[TEST_ASI_BANKS];
+static size_t _test_asi_sz[TEST_ASI_BANKS];
+static size_t _test_asi_retry;
+static int _test_asi_bank;
+
+// init the ASI subsystem, with a string specifying the target time interval for each test
+#define TEST_ASI_INIT(interval_str) do {                   \
+  const char *_str = (interval_str);                       \
+  if (!_str || !*_str) _str = "1.0";                       \
+  double _time = atof(_str);                               \
+  _time = MAX(_time, TEST_ASI_MININTERVAL);                \
+  _test_asi_interval = test_ns_to_ticks(_time*1.0e9);      \
+  assert_always(labs((long)(_time*1000 -  /* within 10ms */\
+    gasnett_ticks_to_ns(_test_asi_interval)/1.0e6)) < 10); \
+  if (TEST_ASI_DEBUG)                                      \
+    MSG0(" ASI: test interval: %0.3f sec",_time);          \
+} while (0)
+
+// inform ASI we are starting a new test so wipe timing state
+#define TEST_ASI_NEW_TEST() do {                     \
+  memset(_test_asi_sz,0,sizeof(_test_asi_sz));       \
+  memset(_test_asi_iters,0,sizeof(_test_asi_iters)); \
+} while (0)
+
+// begin a timed region, with a label name and size "cost", computes iters
+// test can optionally use up to TEST_ASI_BANKS separate banks of iter/size state
+// Call this BEFORE test's own begin timer 
+#define TEST_ASI_BEGIN(name,iters,size,bank) do {                 \
+  if (_test_asi_interval) {                                       \
+   {size_t _new_sz = (size);                                      \
+    int _bank = (bank);                                           \
+    assert(_bank < TEST_ASI_BANKS);                               \
+    assert(_new_sz > 0);                                          \
+    _test_asi_retry = 0;                                          \
+    if (!_test_asi_sz[_bank]) { /* first use this test */         \
+      _test_asi_iters[_bank] = 1; /* slow start and warmup */     \
+      _test_asi_sz[_bank] = _new_sz;                              \
+    } else if (_new_sz != _test_asi_sz[_bank]) { /* scale */      \
+      _test_asi_iters[_bank] *=                                   \
+                    ((double) _test_asi_sz[_bank] / _new_sz );    \
+      _test_asi_iters[_bank] = MAX(1,_test_asi_iters[_bank]);     \
+      _test_asi_sz[_bank] = _new_sz;                              \
+    }                                                             \
+    _test_asi_bank = _bank;                                       \
+   } _TEST_ASI_##name:                                            \
+    assert(_test_asi_iters[_test_asi_bank] > 0);                  \
+    (iters) = _test_asi_iters[_test_asi_bank];                    \
+    _test_asi_begin = gasnett_ticks_now();                        \
+  }                                                               \
+} while (0)
+// end a timed region, may increase iters and branch back to the named label
+// call this AFTER test's own end timer 
+#define TEST_ASI_END(name,iters) do {                             \
+  if (_test_asi_interval) {                                       \
+    assert(_test_asi_begin);                                      \
+    gasnett_tick_t _int = gasnett_ticks_now() - _test_asi_begin;  \
+    _test_asi_begin = 0;                                          \
+    if (_int < _test_asi_interval) { /* too fast, retry */        \
+      _test_asi_iters[_test_asi_bank] *= 2;                       \
+      _test_asi_retry++;                                          \
+      goto _TEST_ASI_##name;                                      \
+    }                                                             \
+    if (TEST_ASI_DEBUG)                                           \
+      MSG(" ASI: retries=%d  final iters=%i  final time=%0.3fs",  \
+        (int)_test_asi_retry,(int)_test_asi_iters[_test_asi_bank],\
+        (double)gasnett_ticks_to_ns(_int)/1.0e9);                 \
+    if (_int > 3*_test_asi_interval) { /* too slow, reset next */ \
+      _test_asi_sz[_test_asi_bank] = 0;                           \
+    }                                                             \
+  }                                                               \
+} while (0)
+
 /* ------------------------------------------------------------------------------------ */
 /* memory management */
 
@@ -262,7 +417,7 @@ static void *_test_malloc(size_t sz, const char *curloc) {
   test_hold_interrupts();
   ptr = malloc(sz);
   test_resume_interrupts();
-  if (ptr == NULL) FATALERR("Failed to malloc(%lu) bytes at %s\n",(unsigned long)sz,curloc);
+  if (ptr == NULL) FATALERR("Failed to malloc(%" PRIuPTR ") bytes at %s\n",(uintptr_t)sz,curloc);
   return ptr;
 }
 static void *_test_calloc(size_t sz, const char *curloc) {
@@ -357,8 +512,8 @@ static int64_t test_calibrate_delay(int iters, int pollcnt, int64_t *time_p)
                   FATALERR("test_calibrate_delay(%i,%i,%i) failed to converge after %i iterations.\n",
                           iters, pollcnt, (int)*time_p, iters);
               #if 0
-                printf("loops=%llu\n",(unsigned long long)loops); fflush(stdout);
-                printf("ratio=%f target=%f time=%llu\n",ratio,target,(unsigned long long)time); fflush(stdout);
+                printf("loops=%" PRIi64 "\n",loops); fflush(stdout);
+                printf("ratio=%f target=%f time=%" PRIi64 "\n",ratio,target,time); fflush(stdout);
               #endif
 	} while (ratio > 1.0);
 
@@ -468,13 +623,21 @@ static int test_thread_limit(int numthreads) {
   #endif
     return MIN(numthreads, limit);
 }
+#if HAVE_PTHREAD_SETCONCURRENCY && __cplusplus
+  // ensure we have a declaration for the configure-detected function
+  #undef pthread_setconcurrency
+  #ifndef __THROW
+  #define __THROW
+  #endif
+  extern "C" int pthread_setconcurrency(int) __THROW;
+#endif
 static void test_createandjoin_pthreads(int numthreads, void *(*start_routine)(void *), 
                                       void *threadarg_arr, size_t threadarg_elemsz) {
     int i;
     int jointhreads = 0;
     uint8_t *threadarg_pos = (uint8_t *)threadarg_arr;
     pthread_t *threadid = (pthread_t *)test_malloc(sizeof(pthread_t)*numthreads);
-    #if HAVE_PTHREAD_SETCONCURRENCY && !GASNETT_CONFIGURE_MISMATCH
+    #if HAVE_PTHREAD_SETCONCURRENCY
       pthread_setconcurrency(numthreads);
     #endif
 
@@ -691,19 +854,15 @@ static void TEST_DEBUGPERFORMANCE_WARNING(void) {
   #ifndef TEST_MAXTHREADS
     #define TEST_MAXTHREADS      GASNETT_MAX_THREADS
   #endif
-  #ifndef TEST_SEGZ_PER_THREAD
-    #define TEST_SEGZ_PER_THREAD (64ULL*1024)
+  #ifndef TEST_SEGZ_PER_THREAD  // provides a default per-thread segsize when TEST_SEGSZ not defined
+    #define TEST_SEGZ_PER_THREAD ((uintptr_t)64*1024)
   #endif
-  #ifndef TEST_SEGSZ
-    #ifdef TEST_SEGSZ_EXPR
+  #ifndef TEST_SEGSZ // TEST_SEGSZ provides a statically-known override value
+    #ifdef TEST_SEGSZ_EXPR // TEST_SEGSZ_EXPR provides a value not statically known
       #define TEST_SEGSZ  alignup(TEST_SEGSZ_EXPR,PAGESZ)
     #else
       #define TEST_SEGSZ  alignup(TEST_MAXTHREADS*TEST_SEGZ_PER_THREAD,PAGESZ)
-    #endif
-  #endif
-  #ifndef TEST_SEGSZ_EXPR
-    #if TEST_SEGSZ < (TEST_MAXTHREADS*TEST_SEGZ_PER_THREAD)
-      #error "TEST_SEGSZ < (TEST_MAXTHREADS*TEST_SEGZ_PER_THREAD)"
+      test_static_assert_file(TEST_SEGSZ >= (TEST_MAXTHREADS*TEST_SEGZ_PER_THREAD));
     #endif
   #endif
 #else
@@ -711,14 +870,15 @@ static void TEST_DEBUGPERFORMANCE_WARNING(void) {
     #ifdef TEST_SEGSZ_EXPR
       #define TEST_SEGSZ  alignup(TEST_SEGSZ_EXPR,PAGESZ)
     #else
-      #define TEST_SEGSZ  alignup(64ULL*1024,PAGESZ)
+      #define TEST_SEGSZ  alignup(64*1024,PAGESZ)
     #endif
   #endif
 #endif
 #ifndef TEST_SEGSZ_EXPR
-  #if (TEST_SEGSZ % PAGESZ) != 0 || TEST_SEGSZ <= 0
-    #error Bad TEST_SEGSZ
-  #endif
+  // validate TEST_SEGSZ properties, when the value is statically-known
+  test_static_assert_file(TEST_SEGSZ > 0);
+  test_static_assert_file(TEST_SEGSZ % PAGESZ == 0);
+  test_static_assert_file(TEST_SEGSZ_REQUEST % PAGESZ == 0);
 #endif
 
 #define TEST_MINHEAPOFFSET  alignup(128*4096,PAGESZ)
@@ -770,13 +930,8 @@ static void TEST_DEBUGPERFORMANCE_WARNING(void) {
     if (numentries) memcpy(mytab, table, numentries*sizeof(gasnet_handlerentry_t));
     mytab[numentries].index = 0; /* "dont care" index */
     mytab[numentries+1].index = 0; /* "dont care" index */
-#if GASNET_USE_STRICT_PROTOTYPES
-    mytab[numentries].fnptr = (void *)_test_seggather;
-    mytab[numentries+1].fnptr = (void *)_test_segbcast;
-#else
     mytab[numentries].fnptr = (void (*)())_test_seggather;
     mytab[numentries+1].fnptr = (void (*)())_test_segbcast;
-#endif
     /* do regular attach, then setup seg_everything segment */
     GASNET_Safe(result = gasnet_attach(mytab, numentries+2, segsize, minheapoffset));
     _test_seggather_idx = mytab[numentries].index;
@@ -878,13 +1033,13 @@ static gasnet_node_t _test_firstnode;
 static int _test_localprocs(void) { /* First call is not thread safe */
   static int count = 0;
   if (!count) {
-    gasnet_node_t my_supernode;
+    gasnet_node_t my_host;
     gasnet_node_t i;
 
     assert(_test_nodeinfo);
-    my_supernode = _test_nodeinfo[gasnet_mynode()].supernode;
+    my_host = _test_nodeinfo[gasnet_mynode()].host;
     for (i=0; i < gasnet_nodes(); i++) {
-      if (_test_nodeinfo[i].supernode == my_supernode) {
+      if (_test_nodeinfo[i].host == my_host) {
         if (!count) _test_firstnode = i;
         count++;
       }
@@ -1026,6 +1181,7 @@ static void _test_init(const char *testname, int reports_performance, int early,
         testname, (int)gasnet_nodes(), GASNET_CONFIG_STRING,
         _STRINGIFY(PLATFORM_COMPILER_FAMILYNAME), PLATFORM_COMPILER_VERSION_STR,
         GASNETT_SYSTEM_TUPLE);
+    fflush(NULL);
     assert(_test_nodeinfo == NULL);
     /* must use malloc here, pre-attach if "early" */
     _test_nodeinfo = (gasnet_nodeinfo_t *)malloc(gasnet_nodes()*sizeof(gasnet_nodeinfo_t));
@@ -1033,14 +1189,10 @@ static void _test_init(const char *testname, int reports_performance, int early,
     if (!early) {
       TEST_SEG(gasnet_mynode()); /* ensure we got the segment requested */
       BARRIER();
-    #if GASNET_PSHM || 1 /* supernode info still of intested when PSHM not used */
-      MSG("hostname is: %s (supernode=%i pid=%i)", gasnett_gethostname(), (int)_test_nodeinfo[gasnet_mynode()].supernode, (int)getpid());
-    #else
-      MSG("hostname is: %s (pid=%i)", gasnett_gethostname(), (int)getpid());
-    #endif
-      fflush(NULL);
-      BARRIER();
-    }
+    } else gasnett_nsleep(250000);
+    MSG("hostname is: %s (supernode=%i pid=%i)", gasnett_gethostname(), (int)_test_nodeinfo[gasnet_mynode()].supernode, (int)getpid());
+    fflush(NULL);
+    if (!early) BARRIER();
   #else
     MSG0("=====> %s config=%s compiler=%s/%s sys=%s",
           testname, GASNETT_CONFIG_STRING,
@@ -1073,7 +1225,9 @@ static void _test_init(const char *testname, int reports_performance, int early,
   }
 #define TEST_BACKTRACE_INIT(_exename)                       \
   /* Only test our backtrace handler if the user is not trying to backtrace */ \
-  if (!gasnett_getenv("GASNET_BACKTRACE")) {                \
+  /* Bug 3644: cannot reliably override GASNET_BACKTRACE_TYPE if already set */ \
+  if (!gasnett_getenv("GASNET_BACKTRACE") &&                \
+      !gasnett_getenv("GASNET_BACKTRACE_TYPE")) {           \
     test_my_backtrace = 1;                                  \
     gasnett_setenv("GASNET_BACKTRACE_TYPE","USER");         \
   }                                                         \

@@ -131,7 +131,7 @@ int gasnete_long_msg_init(void)
     uint32_t threshold = 16384;
 
     threshold = gasneti_getenv_int_withdefault(
-            "GASNET_LONG_MSG_THRESHOLD", threshold, 0);
+            "GASNET_LONG_MSG_THRESHOLD", threshold, 1);
     gasnetc_psm_state.long_msg_threshold = threshold;
 
     if(CPUID_MODEL_PHI_GEN2 == get_cpu_model()) {
@@ -446,10 +446,10 @@ int gasnete_handler_long_get(psm2_am_token_t token,
     return 0;
 }
 
-gasnete_eop_t *gasnete_eop_new(gasnete_threaddata_t * const thread);
+gasnete_eop_t *gasnete_eop_new(gasneti_threaddata_t * const thread);
 
 void gasnete_put_long(gasnet_node_t node, void *dest, void *src,
-        size_t nbytes, gasnet_handle_t op, uint8_t isbulk GASNETE_THREAD_FARG)
+        size_t nbytes, gasnet_handle_t op, uint8_t isbulk GASNETI_THREAD_FARG)
 {
     psm2_epaddr_t epaddr = gasnetc_psm_state.peer_epaddrs[node];
     psm2_mq_tag_t tag;
@@ -539,7 +539,7 @@ fail:
 
 
 void gasnete_get_long (void *dest, gasnet_node_t node, void *src,
-        size_t nbytes, gasnet_handle_t op GASNETE_THREAD_FARG) {
+        size_t nbytes, gasnet_handle_t op GASNETI_THREAD_FARG) {
     psm2_epaddr_t epaddr = gasnetc_psm_state.peer_epaddrs[node];
 
     psm2_mq_tag_t tag, tagsel;
