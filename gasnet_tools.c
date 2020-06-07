@@ -1432,7 +1432,6 @@ static int gasneti_backtrace_userdisabled = 0;
 static const char *gasneti_backtrace_list = 0;
 GASNETT_TENTATIVE_EXTERN
 const char *(*gasneti_backtraceid_fn)(void); /* allow client override of backtrace line prefix */
-gasnett_backtrace_type_t gasnett_backtrace_user; /* allow client provided backtrace function */
 extern void gasneti_backtrace_init(const char *exename) {
   static int user_is_init = 0;
 
@@ -1457,7 +1456,8 @@ extern void gasneti_backtrace_init(const char *exename) {
     return;
   }
 
-  if (!user_is_init && gasnett_backtrace_user.name && gasnett_backtrace_user.fnp) {
+  if (!user_is_init && &gasnett_backtrace_user &&
+	  gasnett_backtrace_user.name && gasnett_backtrace_user.fnp) {
     memcpy(&gasneti_backtrace_mechanisms[gasneti_backtrace_mechanism_count++], &gasnett_backtrace_user, sizeof(gasnett_backtrace_user));
     user_is_init = 1;
   }

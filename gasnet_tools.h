@@ -430,7 +430,7 @@ typedef struct {
   int threadsupport; /* does backtrace function handle threads correctly? 
                               -ie backtrace the calling thread and optionally others as well */
 } gasnett_backtrace_type_t;
-extern gasnett_backtrace_type_t gasnett_backtrace_user;
+extern gasnett_backtrace_type_t gasnett_backtrace_user __attribute__((weak));
 
 /* ------------------------------------------------------------------------------------ */
 /* GASNet tracing/stats support (automatically stubbed out when libgasnet absent) */
